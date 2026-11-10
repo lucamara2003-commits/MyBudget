@@ -1,0 +1,29 @@
+const $=id=>document.getElementById(id), KEY="my-budget-v1";
+const today=new Date(), monthKey=d=>d.slice(0,7), euro=n=>new Intl.NumberFormat("it-IT",{style:"currency",currency:"EUR"}).format(n);
+let data={categories:[{id:"c1",name:"Benzina",limit:300},{id:"c2",name:"Spesa",limit:350},{id:"c3",name:"Uscite",limit:150},{id:"c4",name:"Bollette",limit:200},{id:"c5",name:"Altro",limit:100}],expenses:[]},editing=null;
+try{const saved=JSON.parse(localStorage.getItem(KEY));if(saved?.categories&&saved?.expenses)data=saved}catch{}
+$("month").value=monthKey(today.toISOString().slice(0,10));$("date").value=today.toISOString().slice(0,10);
+const persist=()=>localStorage.setItem(KEY,JSON.stringify(data));
+const current=()=>$("month").value;
+const monthExpenses=()=>data.expenses.filter(e=>monthKey(e.date)===current());
+const spent=id=>monthExpenses().filter(e=>e.categoryId===id).reduce((s,e)=>s+e.amount,0);
+function render(){const expenses=monthExpenses(),total=expenses.reduce((s,e)=>s+e.amount,0),budget=data.categories.reduce((s,c)=>s+c.limit,0),remaining=budget-total;
+$("spent").textContent=euro(total);$("budget").textContent=euro(budget);$("remaining").textContent=euro(remaining);$("remaining").style.color=remaining<0?"var(--red)":"var(--green)";
+const pct=budget?total/budget*100:0;$("overallBar").style.width=Math.min(100,Math.max(0,pct))+"%";$("overallBar").style.background=pct>100?"var(--red)":pct>=80?"var(--yellow)":"var(--green)";$("overallPct").textContent=pct.toFixed(0)+"% del budget utilizzato";
+$("categories").innerHTML=data.categories.map(c=>{const s=spent(c.id),p=c.limit?s/c.limit*100:(s?101:0),state=p>100?"over":p>=80?"warn":"";return `<article class="category"><div class="cathead"><div><div class="catname">${esc(c.name)}</div><div class="catnumbers">${euro(s)} spesi su ${euro(c.limit)}</div></div><span class="pill ${state}">${c.limit?p.toFixed(0):s?"—":"0"}%</span></div><div class="catbar"><i class="${state}" style="width:${Math.min(100,p)}%"></i></div><div class="catfoot"><span>${s>c.limit?"Hai superato di "+euro(s-c.limit):"Disponibili "+euro(c.limit-s)}</span><div class="actions"><button data-edit="${c.id}">Modifica</button><button data-delcat="${c.id}">Elimina</button></div></div></article>`}).join("");
+$("expenseCategory").innerHTML=data.categories.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join("");
+$("movements").innerHTML=expenses.length?expenses.slice().sort((a,b)=>b.date.localeCompare(a.date)||b.id-a.id).map(e=>{const c=data.categories.find(x=>x.id===e.categoryId);return `<div class="movement"><div class="moveinfo"><b>${esc(c?.name||"Categoria eliminata")}</b><small>${esc(e.description||"Spesa")} · ${new Date(e.date+"T12:00:00").toLocaleDateString("it-IT")}</small></div><div class="moveamount">${euro(e.amount)}</div><button class="delete" data-del="${e.id}" aria-label="Elimina">✕</button></div>`}).join(""):'<div class="empty">Nessuna spesa registrata in questo mese.</div>';
+}
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
+$("expenseForm").addEventListener("submit",e=>{e.preventDefault();const amount=Number($("amount").value),date=$("date").value;if(!(amount>0)||!date)return;data.expenses.push({id:Date.now(),categoryId:$("expenseCategory").value,amount,date,description:$("description").value.trim()});persist();$("amount").value="";$("description").value="";$("month").value=monthKey(date);render()});
+$("month").addEventListener("change",render);
+$("addCategory").onclick=()=>openCategory();
+function openCategory(c){editing=c?.id||null;$("dialogTitle").textContent=c?"Modifica categoria":"Nuova categoria";$("catName").value=c?.name||"";$("catLimit").value=c?.limit??"";$("categoryDialog").showModal()}
+$("categoryForm").addEventListener("submit",e=>{if(e.submitter?.value==="cancel")return;e.preventDefault();const name=$("catName").value.trim(),limit=Number($("catLimit").value);if(!name||!Number.isFinite(limit)||limit<0)return;if(data.categories.some(c=>c.name.toLowerCase()===name.toLowerCase()&&c.id!==editing)){alert("Esiste già una categoria con questo nome.");return}if(editing){Object.assign(data.categories.find(c=>c.id===editing),{name,limit})}else data.categories.push({id:"c"+Date.now(),name,limit});persist();$("categoryDialog").close();render()});
+$("categories").addEventListener("click",e=>{const edit=e.target.dataset.edit,del=e.target.dataset.delcat;if(edit){const c=data.categories.find(c=>c.id===edit);openCategory(c)}if(del){const c=data.categories.find(c=>c.id===del);if(confirm(`Eliminare "${c.name}"? Le spese già registrate resteranno nello storico.`)){data.categories=data.categories.filter(c=>c.id!==del);persist();render()}}});
+$("movements").addEventListener("click",e=>{const id=Number(e.target.dataset.del);if(id&&confirm("Eliminare questa spesa?")){data.expenses=data.expenses.filter(x=>x.id!==id);persist();render()}});
+$("clearMonth").onclick=()=>{const ids=new Set(monthExpenses().map(e=>e.id));if(ids.size&&confirm("Eliminare tutte le spese del mese selezionato?")){data.expenses=data.expenses.filter(e=>!ids.has(e.id));persist();render()}};
+$("exportBtn").onclick=()=>{const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download="my-budget-backup.json";a.click();URL.revokeObjectURL(url)};
+$("importFile").onchange=async e=>{try{const d=JSON.parse(await e.target.files[0].text());if(!Array.isArray(d.categories)||!Array.isArray(d.expenses))throw Error();data=d;persist();render()}catch{alert("File di backup non valido.")}};
+$("exportBtn").addEventListener("contextmenu",e=>{e.preventDefault();if(confirm("Vuoi importare un backup?"))$("importFile").click()});
+render();
